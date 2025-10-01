@@ -1,9 +1,10 @@
 import os
 import multiprocessing
-from typing import List, Callable
 from typing import BinaryIO
 import regex as re
-import itertools
+from collections import defaultdict
+
+import time
 
 def find_chunk_boundaries(
     file: BinaryIO,
@@ -51,15 +52,19 @@ def find_chunk_boundaries(
     # Make sure all boundaries are unique, but might be fewer than desired_num_chunks
     return sorted(set(chunk_boundaries))
 
-def process_func(text: str):
+def process_func(text: str, special_tokens: list[str]):
     escaped_tokens = [re.escape(token) for token in special_tokens]
     delimiter = "|".join(escaped_tokens)
     temp = re.split(delimiter, text)
     PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
-    result = [re.finditer(PAT, item) for item in temp]
-    return result
+    token_counts = defaultdict(int)
+    for item in temp:
+        for match in re.finditer(PAT, item):
+            token = tuple(match.group().encode("utf-8"))
+            token_counts[token] += 1
+    return dict(token_counts)
 
-def pretokenize(input_path: str | os.PathLike, special_tokens: list[str],):
+def pretokenize(input_path: str | os.PathLike, special_tokens: list[str]):
     core_count = multiprocessing.cpu_count()
     print(f"Available core number:{core_count}")
     chunks = []
@@ -69,19 +74,17 @@ def pretokenize(input_path: str | os.PathLike, special_tokens: list[str],):
             f.seek(start)
             chunk = f.read(end - start).decode("utf-8", errors="ignore")
             chunks.append(chunk)
-            # Run pre-tokenization on your chunk and store the counts for each pre-token
+    from functools import partial
+    func = partial(process_func, special_tokens=special_tokens)
+    import pickle
+    # Run pre-tokenization on your chunk and store the counts for each pre-token
     with multiprocessing.Pool() as pool:
-        results = pool.map(process_func, chunks)
-    return results
-
-#given result from pretokenization, return stats(count) dictionary for next step
-def build_vocab_dict(l):
-    result = dict()
-    for i in l:
-        for j in i:
-            for item in j:
-                t = tuple(item.encode("utf-8"))
-                result[t] = result.get(t, 0) + 1
+        results = pool.map(func, chunks)
+    total_counts = defaultdict(int)
+    for counts in results:
+        for token, cnt in counts.items():
+            total_counts[token] += cnt
+    return total_counts
 
 def seek_pair(target: tuple[int], pair: list[int]):
     count = 0
@@ -95,13 +98,18 @@ def merge(pair: tuple[int], target: tuple[int], new_id: int):
     if pair[0] in target and pair[1] in target:
         num_list = list(target)
         i = 0
+        status = 0
         while i < len(num_list) - 1:
             if (num_list[i], num_list[i+1]) == pair:
+                status = 1
                 num_list[i] = new_id
                 del num_list[i+1]
             else:
                 i += 1
-        return tuple(num_list), target
+        if status:
+            return tuple(num_list), target
+        else:
+            return None, None
     return None, None
 
 def calculate_difference(old_dict, new_dict):
@@ -120,40 +128,44 @@ def train_bpe(
     special_tokens: list[str],
     **kwargs,
 ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
-
     # initialize vocab
+    t1 = time.time()
     vocab: dict[int, bytes] = dict()
     merges: list[tuple[bytes, bytes]] = []
     if vocab_size < 256 + len(special_tokens):
         print("Error! Unable to construct dictionary.")
     for i in range(256):
-        vocab[i] = bytes(i)
-
+        vocab[i] = bytes([i])
+    t2 = time.time()
+    print(f"初始化用时：{t2-t1}")
     # pre-tokenize
-    tokens = pretokenize(input_path, special_tokens)
-    dic_word = build_vocab_dict(tokens)
-    
+    t1 = time.time()
+    dic_word = pretokenize(input_path, special_tokens)
+    t2 = time.time()
+    print(f"pretoken用时：{t2-t1}")
     # construct pair-wise counts dictionary
-    dic_pair = dict()
-    for i in range(256):
-        for j in range(256):
-            count = 0
-            for key, value in dic_word.items():
-                count += seek_pair(key, [i,j]) * value
-            dic_pair[(i,j)] = count
-
+    t1 = time.time()
+    dic_pair = defaultdict(int)
+    for key, value in dic_word.items():
+        for i in range(len(key)-1):
+            dic_pair[(key[i], key[i+1])] += value
+    dic_pair = dict(dic_pair)
+    t2 = time.time()
+    print(f"构建pair对词典用时：{t2-t1}")
     # merge
+    t1 = time.time()
     id = 256
     max_num = vocab_size - len(special_tokens)
-    while id <= max_num:
-        max_key = max(dic_pair, key=lambda k: dic_pair[k])
-        merges.append(tuple(vocab[max_key[0]], vocab[max_key[1]]))
+    while id < max_num:
+        max_key = max(dic_pair, key=lambda k: (dic_pair[k], (vocab[k[0]],vocab[k[1]]))) #following dictonary（字典序）
+        merges.append((vocab[max_key[0]], vocab[max_key[1]]))
         vocab[id] = vocab[max_key[0]] + vocab[max_key[1]]
         # update dic_pair and dic_word
-        for item in dic_word.keys():
+        temp_list = list(dic_word.keys())
+        for item in temp_list:
             new, old = merge(max_key, item, id)
             if new:
-                dic_word[new] = dic_word[old]
+                dic_word[new] = dic_word[old] + dic_word.get(new, 0)
                 del dic_word[old]
                 # compare change of pair-wise count between new and old
                 new_dic = dict()
@@ -161,12 +173,26 @@ def train_bpe(
                 for i in range(len(new) - 1):
                     new_dic[(new[i], new[i+1])] = new_dic.get((new[i], new[i+1]), 0) + 1
                 for i in range(len(old) - 1):
-                    new_dic[(old[i], old[i+1])] = old_dic.get((old[i], old[i+1]), 0) + 1
+                    old_dic[(old[i], old[i+1])] = old_dic.get((old[i], old[i+1]), 0) + 1
                 dif = calculate_difference(old_dic, new_dic)
                 for key,value in dif.items():
                     dic_pair[key] = dic_pair.get(key,0) + value * dic_word[new]
         del dic_pair[max_key]               
         id += 1
+    t2 = time.time()
+    print(f"合并用时：{t2-t1}")
     for i, t in enumerate(special_tokens):
         vocab[i + id] = t.encode("utf-8")
     return vocab, merges
+
+# This part is for test(debugging)
+if __name__ == "__main__":
+    import pathlib
+    test_input_path = pathlib.Path("../tests/fixtures/tinystories_sample_5M.txt")  
+    test_vocab_size = 1000
+    test_special_tokens = ["<|endoftext|>"]
+    trained_vocab, trained_merges = train_bpe(
+        input_path=test_input_path,
+        vocab_size=test_vocab_size,
+        special_tokens=test_special_tokens
+    )
