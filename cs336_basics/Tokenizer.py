@@ -3,7 +3,7 @@ import multiprocessing
 from typing import BinaryIO
 import regex as re
 from collections import defaultdict
-
+from typing import Iterable, Iterator
 import time
 
 def find_chunk_boundaries(
@@ -186,13 +186,128 @@ def train_bpe(
     return vocab, merges
 
 # This part is for test(debugging)
+# if __name__ == "__main__":
+#     import pathlib
+#     test_input_path = pathlib.Path("../data/TinyStoriesV2-GPT4-train.txt")  
+#     test_vocab_size = 10000
+#     test_special_tokens = ["<|endoftext|>"]
+#     trained_vocab, trained_merges = train_bpe(
+#         input_path=test_input_path,
+#         vocab_size=test_vocab_size,
+#         special_tokens=test_special_tokens
+#     )
+#     import pickle
+#     with open("vocab.pkl", "wb") as f:
+#         pickle.dump(trained_vocab, f) 
+#     with open("merges.pkl", "wb") as f:
+#         pickle.dump(trained_merges, f) 
+#     m = max(trained_vocab, key = lambda k: len(trained_vocab[k]))
+#     print(f"The longest vocab is {trained_vocab[m]}")
 if __name__ == "__main__":
     import pathlib
-    test_input_path = pathlib.Path("../tests/fixtures/tinystories_sample_5M.txt")  
-    test_vocab_size = 1000
+    test_input_path = pathlib.Path("../data/owt_train.txt")  
+    test_vocab_size = 32000
     test_special_tokens = ["<|endoftext|>"]
     trained_vocab, trained_merges = train_bpe(
         input_path=test_input_path,
         vocab_size=test_vocab_size,
         special_tokens=test_special_tokens
     )
+    import pickle
+    with open("vocab_owt.pkl", "wb") as f:
+        pickle.dump(trained_vocab, f) 
+    with open("merges_owt.pkl", "wb") as f:
+        pickle.dump(trained_merges, f) 
+    m = max(trained_vocab, key = lambda k: len(trained_vocab[k]))
+    print(f"The longest vocab is {trained_vocab[m]}")
+
+
+#####################################################################
+##########################Tokenizer class############################
+#####################################################################
+class Tokenizer():
+    def __init__(self,
+                 vocab: dict[int, bytes],
+                 merges: list[tuple[bytes, bytes]],
+                 special_tokens: list[str] | None = None):
+        self.vocab = vocab
+        self.merges = merges
+        self.special_tokens = special_tokens
+
+    @classmethod
+    def from_files(cls,
+                   vocab_filepath: str,
+                   merges_filepath: str,
+                   special_tokens: list[str] | None = None):
+        import pickle
+        with open(vocab_filepath, "rb") as file:
+            vocab = pickle.load(file)
+        with open(merges_filepath, "rb") as file:
+            merges = pickle.load(file)
+        return cls(vocab, merges, special_tokens)
+    # def encode(self, text: str) -> list[]:
+    #     escaped_tokens = [re.escape(token) for token in self.special_tokens]
+    #     pattern = f"({'|'.join(escaped_tokens)})"
+    #     delimiter = "|".join(escaped_tokens)
+    def encode(self, text: str) -> list[int]:
+        if len(text) == 0:
+            return []
+        vocab_dict = {k: v for v, k in self.vocab.items()}
+        # deal with special tokens and pre-tokenize
+        if self.special_tokens == None:
+            text = [text]
+            captured_tokens = []
+        else:
+            special_token = sorted(self.special_tokens, key=lambda s: len(s), reverse=True)
+            escaped_tokens = [re.escape(token) for token in special_token]
+            pattern = f"({'|'.join(escaped_tokens)})"
+            delimiter = "|".join(escaped_tokens)
+            captured_tokens = re.findall(pattern, text)
+            text = re.split(delimiter, text)
+        result = []
+        PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+        for i in range(len(text) - 1):
+            PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+            item = re.findall(PAT, text[i])
+            for t in item:
+                result.append([vocab_dict[bytes([i])] for i in t.encode("utf-8")])
+            if captured_tokens:
+                result.append([vocab_dict[captured_tokens[i].encode("utf-8")]])
+        for t in re.findall(PAT, text[-1]):
+            result.append([vocab_dict[bytes([i])] for i in t.encode("utf-8")])
+        
+        # merge
+        for vocab in result:
+            for merge in self.merges:
+                pair = [vocab_dict[merge[0]], vocab_dict[merge[1]]]
+                if pair[0] in vocab and pair[1] in vocab:
+                    i = 0
+                    while i < len(vocab) - 1:
+                        status = 0
+                        if vocab[i] == pair[0]:
+                            if vocab[i + 1] == pair[1]:
+                                vocab[i] = vocab_dict[merge[0] + merge[1]]
+                                del vocab[i + 1]
+                                status = 1
+                        if not status:
+                            i += 1
+        final_result = []
+        for item in result:
+            final_result += item
+        return final_result
+    
+    def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
+        def result():
+            for t in iterable:
+                t = self.encode(str(t))
+                for i in t:
+                    yield i
+        return result()
+
+    def decode(self, ids: list[int]) -> str:
+        if len(ids) == 0:
+            return ""
+        result = self.vocab[ids[0]]
+        for i in range(1, len(ids)):
+            result += self.vocab[ids[i]]
+        return result.decode("utf-8", errors="replace")   
