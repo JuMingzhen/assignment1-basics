@@ -89,4 +89,14 @@ class RotaryPositionalEmbedding(nn.Module):
         if seq_len is not None:
             cos = self.cos[:seq_len, :]
             sin = self.sin[:seq_len, :]
+        cos = repeat(cos, "seq dim -> seq (dim repeat)", repeat = 2)
+        sin = repeat(sin, "seq dim -> seq (dim repeat)", repeat = 2)
+        # rearrange last dim
+        dim = x.size(-1)
+        x_reshaped = x.view(*x.shape[:-1], dim//2, 2)
+        x_rearranged = torch.stack([
+            -x_reshaped[..., 1], 
+            x_reshaped[..., 0]    
+        ], dim=-1)
+        x_rearranged = x_rearranged.view(*x.shape)
 
