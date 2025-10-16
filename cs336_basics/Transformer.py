@@ -180,3 +180,38 @@ class multihead_self_attention(nn.Module):
         Temp = scaled_dot_product_attention(K, Q, V, mask)
         Temp = rearrange(Temp, "... head seq d_h -> ... seq (head d_h)")
         return einsum(Temp, self.W_o, "... dim1, dim dim1 -> ... dim")
+
+class transformer_block(nn.Module):
+    def __init__(self, d_model: int, num_heads: int, d_ff: int, eps = None, RoPE = None,
+                 token_positions = None, weights = None, device = None, dtype = None):
+        '''
+        weights: dict---> keys: "MHA", "RMS1", "RMS2", "ff"
+        where each values of keys above are:
+        weights["MHA"] = {'k': *, 'q': *,'v': *,'o': *}
+        weights["RMS1"] = {'gamma': *}
+        weights["RMS2"] = {'gamma': *}
+        weights["ff"] = {'W1.W': *, 'W2.W': *, 'W3.W': *}
+        '''
+        super().__init__()
+        self.d_model = d_model
+        self.h = num_heads
+        self.d_ff = d_ff
+        weight_MHA = None
+        if eps == None:
+            self.RMS1 = RMSNorm(d_model, device = device, dtype = dtype)
+            self.RMS2 = RMSNorm(d_model, device = device, dtype = dtype)
+        else:
+            self.RMS1 = RMSNorm(d_model, eps, device, dtype)
+            self.RMS2 = RMSNorm(d_model, eps, device, dtype)
+        self.ff = SwiGLU(d_model, d_ff, device, dtype)
+        if weights is not None:
+            weight_MHA = weights["MHA"]
+            self.RMS1.load_state_dict(weights['RMS1'])
+            self.RMS2.load_state_dict(weights['RMS2'])
+            self.ff.load_state_dict(weights['ff'])
+        self.MHA = multihead_self_attention(d_model, num_heads, weight_MHA, RoPE, 
+                                            token_positions, device, dtype)
+    def forward(self, x: torch.Tensor):
+        x = x + self.MHA(self.RMS1(x))
+        x = x + self.ff(self.RMS2(x))
+        return x
