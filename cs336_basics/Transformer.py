@@ -3,6 +3,7 @@ from torch import Tensor
 import torch.nn as nn
 from torch.optim import Optimizer 
 from einops import rearrange, einsum, reduce, repeat
+import math
 
 class Linear(nn.Module):
     def __init__(self, in_features, out_features, device=None, dtype=None):
@@ -79,24 +80,67 @@ class RotaryPositionalEmbedding(nn.Module):
         self.dim = d_k
         self.max_len = max_seq_len
         self.device = device
-        theta = 1.0 / (theta ** (torch.arange(0, d_k, 2) / d_k))
-        seq_idx = torch.arange(max_seq_len)
+        theta = 1.0 / (theta ** (torch.arange(0, d_k, 2, device = device, dtype=dtype) / d_k))
+        seq_idx = torch.arange(max_seq_len, device = device, dtype=dtype)
         m_theta = torch.outer(seq_idx, theta)
-        self.register_buffer("cos", torch.cos(m_theta, device = device, dtype=dtype), persistent=False)
-        self.register_buffer("sin", torch.sin(m_theta, device = device, dtype=dtype), persistent=False)
+        self.register_buffer("cos", torch.cos(m_theta), persistent=False)
+        self.register_buffer("sin", torch.sin(m_theta), persistent=False)
+
     def forward(self, x: torch.Tensor, token_positions: torch.Tensor) -> torch.Tensor:
+        # Algorithm reference: https://www.zhihu.com/tardis/bd/art/647109286?source_id=1001
         seq_len = x.size(-2)
         if seq_len is not None:
             cos = self.cos[:seq_len, :]
             sin = self.sin[:seq_len, :]
         cos = repeat(cos, "seq dim -> seq (dim repeat)", repeat = 2)
         sin = repeat(sin, "seq dim -> seq (dim repeat)", repeat = 2)
-        # rearrange last dim
-        dim = x.size(-1)
-        x_reshaped = x.view(*x.shape[:-1], dim//2, 2)
-        x_rearranged = torch.stack([
-            -x_reshaped[..., 1], 
-            x_reshaped[..., 0]    
-        ], dim=-1)
-        x_rearranged = x_rearranged.view(*x.shape)
+        sin = sin[token_positions]
+        cos = cos[token_positions]
+        # rearrange last dim of x
+        # How to optimize codes below?
+        x_s = rearrange(x, "... (d r) -> ... d r", r = 2)
+        x_s = torch.flip(x_s, dims=[-1])
+        x_s = rearrange(x_s, "... d r -> ... (d r)")
+        minus = torch.tensor([-1.0, 1.0], device = self.device)
+        minus = repeat(minus, "d -> (r d)", r = int(self.dim/2))
+        x_s = einsum(x_s, minus, "... dim, dim -> ... dim")
 
+        # calculate RoPE
+        x = einsum(x, cos, "... dim, ... dim -> ... dim")
+        x_s = einsum(x_s, sin, "... dim, ... dim -> ... dim")
+        return x + x_s
+    
+def Softmax(x: torch.Tensor, dim: int):
+    # Find the maximum value in the specified dimension for numerical stability
+    max_vals = torch.max(x, dim=dim, keepdim=True).values
+    # Subtract max values to prevent overflow
+    stabilized = x - max_vals
+    # Compute exponentials
+    exponentials = torch.exp(stabilized)
+    # Compute sum of exponentials along the specified dimension
+    exp_sum = torch.sum(exponentials, dim=dim, keepdim=True)
+    return exponentials / exp_sum
+
+def scaled_dot_product_attention(k: torch.Tensor, q: torch.Tensor, 
+                                 v: torch.Tensor, mask: torch.Tensor = None):
+    d_k = math.sqrt(k.size(-1))
+    pre_softmax = einsum(q, k, "... seq1 d_k, ... seq2 d_k -> ... seq1 seq2")
+    pre_softmax = pre_softmax / d_k
+    if mask is not None:
+        pre_softmax = torch.where(mask, pre_softmax, float("-inf")) 
+        # Be careful of using torch.masked_fill
+    softmax = Softmax(pre_softmax, -1)
+    return einsum(softmax, v, "... seq1 seq2, ... seq2 d_v -> ... seq1 d_v")
+
+class multihead_self_attention(nn.Modules):
+    def __init__(self, d_model: int, num_heads, device = None, dtype = None):
+        super().__init__()
+        self.h = num_heads
+        self.W_k = nn.Parameter(torch.empty((d_model, d_model), device = device, dtype = dtype))
+        self.W_q = nn.Parameter(torch.empty((d_model, d_model), device = device, dtype = dtype))
+        self.W_v = nn.Parameter(torch.empty((d_model, d_model), device = device, dtype = dtype))
+        self.W_o = nn.Parameter(torch.empty((d_model, d_model), device = device, dtype = dtype))
+        
+    def foward(self, x: torch.Tensor) -> torch.Tensor: 
+        
+        pass

@@ -10,7 +10,8 @@ from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
 from cs336_basics.Tokenizer import train_bpe, Tokenizer
-from cs336_basics.Transformer import Linear, Embedding, RMSNorm, SwiGLU
+from cs336_basics.Transformer import Linear, Embedding, RMSNorm, SwiGLU, RotaryPositionalEmbedding
+from cs336_basics.Transformer import Softmax, scaled_dot_product_attention
 
 def run_linear(
     d_in: int,
@@ -113,7 +114,7 @@ def run_scaled_dot_product_attention(
     Returns:
         Float[Tensor, " ... queries d_v"]: Output of SDPA
     """
-    raise NotImplementedError
+    return scaled_dot_product_attention(K, Q, V, mask)
 
 
 def run_multihead_self_attention(
@@ -209,7 +210,8 @@ def run_rope(
     Returns:
         Float[Tensor, " ... sequence_length d_k"]: Tensor with RoPEd input.
     """
-    raise NotImplementedError
+    RoPE = RotaryPositionalEmbedding(theta, d_k, max_seq_len)
+    return RoPE(in_query_or_key, token_positions)
 
 
 def run_transformer_block(
@@ -443,7 +445,7 @@ def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, "
         Float[Tensor, "..."]: Tensor of with the same shape as `in_features` with the output of
         softmax normalizing the specified `dim`.
     """
-    raise NotImplementedError
+    return Softmax(in_features, dim)
 
 
 def run_cross_entropy(
