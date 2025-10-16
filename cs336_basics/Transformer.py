@@ -132,15 +132,51 @@ def scaled_dot_product_attention(k: torch.Tensor, q: torch.Tensor,
     softmax = Softmax(pre_softmax, -1)
     return einsum(softmax, v, "... seq1 seq2, ... seq2 d_v -> ... seq1 d_v")
 
-class multihead_self_attention(nn.Modules):
-    def __init__(self, d_model: int, num_heads, device = None, dtype = None):
+class multihead_self_attention(nn.Module):
+    def __init__(self, d_model: int, num_heads:int, weight: dict[str,Tensor] = None, 
+                 RoPE = None, token_positions = None, device = None, dtype = None):
         super().__init__()
         self.h = num_heads
-        self.W_k = nn.Parameter(torch.empty((d_model, d_model), device = device, dtype = dtype))
-        self.W_q = nn.Parameter(torch.empty((d_model, d_model), device = device, dtype = dtype))
-        self.W_v = nn.Parameter(torch.empty((d_model, d_model), device = device, dtype = dtype))
-        self.W_o = nn.Parameter(torch.empty((d_model, d_model), device = device, dtype = dtype))
-        
-    def foward(self, x: torch.Tensor) -> torch.Tensor: 
-        
-        pass
+        self.d = d_model
+        self.d_h = int(self.d / self.h) 
+        self.device = device
+        if weight is not None:
+            self.W_k = nn.Parameter(weight["k"]).to(device=device, dtype = dtype)
+            self.W_q = nn.Parameter(weight["q"]).to(device=device, dtype = dtype)
+            self.W_v = nn.Parameter(weight["v"]).to(device=device, dtype = dtype)
+            self.W_o = nn.Parameter(weight["o"]).to(device=device, dtype = dtype)
+        else:
+            self.W_k = nn.Parameter(torch.empty((d_model, d_model), device = device, dtype = dtype))
+            self.W_q = nn.Parameter(torch.empty((d_model, d_model), device = device, dtype = dtype))
+            self.W_v = nn.Parameter(torch.empty((d_model, d_model), device = device, dtype = dtype))
+            self.W_o = nn.Parameter(torch.empty((d_model, d_model), device = device, dtype = dtype))
+            sigma = torch.sqrt(torch.tensor(1.0 / d_model))
+            nn.init.trunc_normal_(self.W_k, mean=0.0, std=sigma, a=-3*sigma, b=3*sigma)
+            nn.init.trunc_normal_(self.W_q, mean=0.0, std=sigma, a=-3*sigma, b=3*sigma)
+            nn.init.trunc_normal_(self.W_v, mean=0.0, std=sigma, a=-3*sigma, b=3*sigma)
+            nn.init.trunc_normal_(self.W_o, mean=0.0, std=sigma, a=-3*sigma, b=3*sigma)
+        self.RoPE = RoPE
+        self.token_positions = token_positions
+    def forward(self, x: torch.Tensor) -> torch.Tensor: 
+        Q = einsum(self.W_q, x, "d_q dim, ... dim -> ... d_q")
+        K = einsum(self.W_k, x, "d_k dim, ... dim -> ... d_k")
+        V = einsum(self.W_v, x, "d_v dim, ... dim -> ... d_v")
+        Q = rearrange(Q, "... seq (head d_h) -> ... head seq d_h", head = self.h)
+        K = rearrange(K, "... seq (head d_h) -> ... head seq d_h", head = self.h)
+        V = rearrange(V, "... seq (head d_h) -> ... head seq d_h", head = self.h)
+        seq = Q.size(-2)
+        if self.RoPE:
+            if self.token_positions is not None:
+                expanded_seq = self.token_positions
+            else:
+                prefix_dims = Q.shape[:-2]
+                base_seq = torch.arange(seq, dtype=torch.int64, device = self.device)
+                for _ in range(len(prefix_dims)):
+                    base_seq = base_seq.unsqueeze(0)  # 在最前面插入新维度
+                expanded_seq = base_seq.repeat(*prefix_dims, 1)
+            K = self.RoPE(K, expanded_seq)
+            Q = self.RoPE(Q, expanded_seq)
+        mask = ~ torch.triu(torch.ones((seq, seq), device = self.device), diagonal=1).bool()
+        Temp = scaled_dot_product_attention(K, Q, V, mask)
+        Temp = rearrange(Temp, "... head seq d_h -> ... seq (head d_h)")
+        return einsum(Temp, self.W_o, "... dim1, dim dim1 -> ... dim")
