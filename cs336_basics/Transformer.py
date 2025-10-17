@@ -29,7 +29,7 @@ class Embedding(nn.Module):
         nn.init.trunc_normal_(self.embedding, mean = 0.0, std = 1.0, a=-3.0, b=3.0)
     def forward(self, x: torch.LongTensor) -> torch.Tensor:
         original_shape = x.shape
-        flat_x = x.view(-1) 
+        flat_x = x.reshape(-1) 
         # (total_elements, embedding_dim)
         flat_embeds = torch.index_select(self.embedding, 0, flat_x)
         output_shape = original_shape + (self.embedding_dim,)
@@ -215,3 +215,46 @@ class transformer_block(nn.Module):
         x = x + self.MHA(self.RMS1(x))
         x = x + self.ff(self.RMS2(x))
         return x
+    
+class transformer_lm(nn.Module):
+    """
+    weights: dict---> keys: "MHA", "embedding", "final_ff", "final_norm"
+    where each values of keys above are:
+    weights["MHA"] = list[{'MHA.W_k': *, 'MHA.W_q': *,'MHA.W_v': *,'MHA.W_o': *,
+      'RMS1.gamma': *, 'RMS2.gamma': *, 'ff.W1.W': *, 'ff.W2.W': *, 'ff.W3.W': *}]
+    weights["embedding"] = {'embedding': *}
+    weights["final_norm"] = {'gamma': *}
+    weights["final_ff"] = {'W': *}
+    """
+    def __init__(self, vocab_size:int, context_length:int, num_layers:int, d_model:int,
+                 num_heads = 4, d_ff = 128, eps:float = 0.00001, RoPE_theta = 10000,  
+                 weights = None, device = None, dtype = None):
+        super().__init__()
+        self.num_heads = num_heads
+        self.max_length = context_length
+        self.num_heads = num_heads
+        self.d_model = d_model
+        self.d_ff = d_ff
+
+        self.embedding = Embedding(vocab_size, d_model, device, dtype)
+        self.norm = RMSNorm(d_model, eps, device, dtype)
+        self.final_ff = Linear(d_model, vocab_size, device, dtype)
+        RoPE = RotaryPositionalEmbedding(RoPE_theta, int(d_model/num_heads), context_length, device, dtype)
+        self.transformer_blocks = nn.ModuleList([
+            transformer_block(d_model, num_heads, d_ff, eps, RoPE, None, None, device, dtype)
+            for _ in range(num_layers)
+        ])
+        if weights is not None:
+            self.embedding.load_state_dict(weights["embedding"])
+            self.norm.load_state_dict(weights["final_norm"])
+            self.final_ff.load_state_dict(weights["final_ff"])
+            for _ in range(num_layers):
+                self.transformer_blocks[_].load_state_dict(weights["MHA"][_])
+        
+    def forward(self, x:torch.Tensor):
+        assert x.size(-2) <= self.max_length
+        activation = self.embedding(x)
+        for module in self.transformer_blocks:
+            activation = module(activation)
+        return self.final_ff(self.norm(activation))
+    
