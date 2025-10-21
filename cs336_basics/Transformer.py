@@ -2,6 +2,8 @@ import torch
 from torch import Tensor 
 import torch.nn as nn
 from torch.optim import Optimizer 
+from collections.abc import Callable, Iterable
+from typing import Optional
 from einops import rearrange, einsum, reduce, repeat
 import math
 
@@ -258,3 +260,44 @@ class transformer_lm(nn.Module):
             activation = module(activation)
         return self.final_ff(self.norm(activation))
     
+def cross_entropy(logits: torch.Tensor, next_token: torch.Tensor):
+    logits = logits - torch.max(logits, dim = -1, keepdim=True).values
+    next_token = next_token.unsqueeze(-1)
+    loss = - torch.gather(logits, -1, next_token) + torch.log(torch.sum(torch.exp(logits), dim = -1))
+    return torch.mean(loss)
+
+class AdamW(torch.optim.Optimizer):
+    def __init__(self, params, lr=1e-3, betas:tuple[float] = [0.9, 0.999], eps=1e-8, weight_decay=0.1):
+        if lr < 0:
+            raise ValueError(f"Invalid learning rate: {lr}")
+        defaults = {"lr": lr, "betas": betas, "eps":eps, "lambda":weight_decay}
+        super().__init__(params, defaults)
+    
+    def step(self, closure: Optional[Callable] = None):
+        loss = None if closure is None else closure()
+        for group in self.param_groups:
+            lr = group["lr"]
+            beta = group["betas"]
+            eps = group["eps"]
+            lam = group["lambda"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                state = self.state[p]
+                t = state.get("t", 0) 
+                m = state.get("m", torch.zeros_like(p.data))
+                v = state.get("v", torch.zeros_like(p.data))
+                grad = p.grad.data
+                # update m and v and t
+                state["m"] = beta[0] * m + (1 - beta[0]) * grad
+                state["v"] = beta[1] * v + (1 - beta[1]) * grad * grad
+                state["t"] = t + 1
+                # learning rate
+                lr_p = lr * math.sqrt(1 - beta[1] ** (t + 1)) / (1 - beta[0] ** (t + 1))
+                # update params
+                p.data -= lr_p * state["m"] / (torch.sqrt(state["v"]) + eps) # Update weight
+                p.data -= lr * lam * p.data
+        return loss
+
+
+
