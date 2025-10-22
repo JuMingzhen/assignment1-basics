@@ -299,5 +299,28 @@ class AdamW(torch.optim.Optimizer):
                 p.data -= lr * lam * p.data
         return loss
 
+def learning_rate_schedule(t, alpha_max, alpha_min, T_w, T_c):
+    if t < T_w:
+        return t / T_w * alpha_max
+    elif t >= T_w and t <= T_c:
+        angle = math.cos((t - T_w)/(T_c - T_w)*math.pi)
+        return alpha_min + 0.5 * (1 + angle) * (alpha_max - alpha_min)
+    else:
+        return alpha_min
 
-
+def gradient_clipping(params, M, eps: float = 1e-6):
+    norm = 0
+    for param in params:
+        grad = param.grad
+        if grad is None:
+            continue
+        norm += torch.norm(grad, p = 2) ** 2
+    norm = math.sqrt(norm)
+    print(type(param.grad))
+    if norm > M:
+        scale = M / (norm + eps) 
+        for param in params:
+            grad = param.grad
+            if grad is not None:
+                param.grad *= scale
+    return None
