@@ -349,3 +349,27 @@ def load_checkpoint(src: str | os.PathLike | typing.BinaryIO | typing.IO[bytes],
     optimizer.load_state_dict(obj["optimizer"])
     return obj["iteration"]
 
+def decoding(model: nn.Module, tokenizer, prompt, max_token = 100, temperature = 1.0, p:float = 1.0):
+    prompt = tokenizer.encode(prompt)
+    model.eval()
+    original_length = len(prompt)
+    while len(prompt) < original_length + max_token:
+        with torch.no_grad():
+            logits = model(prompt)[-1]
+            logits = logits / temperature
+            q = Softmax(logits, -1)
+            if p < 1.0:
+                sorted_probs, sorted_indices = torch.sort(q, descending=True) 
+                cumulative_probs = torch.cumsum(sorted_probs, dim=0)
+                idx = torch.where(cumulative_probs >= p)[0][0]
+                candidate_probs = sorted_probs[:idx+1]
+                candidate_indices = sorted_indices[:idx+1]
+                normalized_probs = candidate_probs / candidate_probs.sum()
+                sampled_idx = torch.multinomial(normalized_probs, num_samples=1).item()
+                index = candidate_indices[sampled_idx].item() # final index selected
+            index = torch.multinomial(q, num_samples=1).item()
+            if tokenizer.vocab[index] == "<|endoftext|>":
+                break
+            prompt = torch.cat([prompt, torch.tensor([index])], dim=0)
+    return tokenizer.decode(prompt)
+
