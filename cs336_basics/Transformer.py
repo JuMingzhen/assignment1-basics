@@ -4,6 +4,9 @@ import torch.nn as nn
 from torch.optim import Optimizer 
 from collections.abc import Callable, Iterable
 from typing import Optional
+import typing
+import os
+import numpy as np
 from einops import rearrange, einsum, reduce, repeat
 import math
 
@@ -287,7 +290,7 @@ class AdamW(torch.optim.Optimizer):
                 t = state.get("t", 0) 
                 m = state.get("m", torch.zeros_like(p.data))
                 v = state.get("v", torch.zeros_like(p.data))
-                grad = p.grad.data
+                grad = p.grad
                 # update m and v and t
                 state["m"] = beta[0] * m + (1 - beta[0]) * grad
                 state["v"] = beta[1] * v + (1 - beta[1]) * grad * grad
@@ -316,7 +319,6 @@ def gradient_clipping(params, M, eps: float = 1e-6):
             continue
         norm += torch.norm(grad, p = 2) ** 2
     norm = math.sqrt(norm)
-    print(type(param.grad))
     if norm > M:
         scale = M / (norm + eps) 
         for param in params:
@@ -324,3 +326,25 @@ def gradient_clipping(params, M, eps: float = 1e-6):
             if grad is not None:
                 param.grad *= scale
     return None
+
+def data_loading(x, batch_size: int, context_length: int, device = None):
+    max_indice = len(x) - context_length - 1
+    indices = np.random.choice(max_indice + 1, size = batch_size, replace=False)
+    sequences = np.array([x[start:start+context_length] for start in indices])
+    next_token = np.array([x[start+1:start+context_length+1] for start in indices])
+    return (torch.tensor(sequences, device = device), torch.tensor(next_token, device = device))
+
+def checkpoint(model: torch.nn.Module,
+               optimizer: torch.optim.Optimizer,
+               iteration: int,
+               out: str | os.PathLike | typing.BinaryIO | typing.IO[bytes]):
+    obj = {"model": model.state_dict(), "optimizer": optimizer.state_dict(), "iteration": iteration}
+    torch.save(obj, out)
+
+def load_checkpoint(src: str | os.PathLike | typing.BinaryIO | typing.IO[bytes],
+                    model: torch.nn.Module,
+                    optimizer: torch.optim.Optimizer):
+    obj = torch.load(src)
+    model.load_state_dict(obj["model"])
+    optimizer.load_state_dict(obj["optimizer"])
+    return obj["iteration"]
