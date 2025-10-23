@@ -1,0 +1,46 @@
+# Training Configuration Template
+# This file contains all available configuration options for training the Transformer model
+
+# Model Architecture Parameters
+vocab_size: 32000                    # Vocabulary size (should match tokenizer)
+context_length: 512                  # Maximum sequence length
+num_layers: 6                        # Number of transformer layers
+d_model: 512                         # Model dimension
+num_heads: 8                         # Number of attention heads
+d_ff: 2048                          # Feed-forward dimension
+eps: 1e-5                           # RMSNorm epsilon
+rope_theta: 10000                   # RoPE theta parameter
+
+# Training Parameters
+batch_size: 32                      # Batch size for training
+learning_rate: 1e-4                 # Initial learning rate
+weight_decay: 0.1                   # Weight decay for AdamW
+beta1: 0.9                          # Adam beta1 parameter
+beta2: 0.999                        # Adam beta2 parameter
+eps_optimizer: 1e-8                 # Adam epsilon parameter
+max_grad_norm: 1.0                  # Maximum gradient norm for clipping
+
+# Learning Rate Schedule
+warmup_steps: 1000                  # Number of warmup steps
+max_steps: 10000                    # Maximum training steps
+min_lr: 1e-6                        # Minimum learning rate
+
+# Data Parameters
+data_path: "data/train_tokens.npy"          # Path to training data (.npy file)
+
+# Checkpointing and Logging
+checkpoint_dir: "checkpoints"               # Directory to save checkpoints
+checkpoint_interval: 1000                   # Save checkpoint every N steps
+log_interval: 100                          # Log training metrics every N steps
+
+# Weights & Biases Integration
+use_wandb: false                           # Enable W&B logging
+wandb_project: "transformer-training"      # W&B project name
+wandb_run_name: null                       # W&B run name (null for auto-generated)
+
+# Device Configuration
+device: "cuda"                             # Device to use (cuda/cpu)
+dtype: "float32"                          # Data type (float32/float16)
+
+# Resume Training
+resume_from_checkpoint: null               # Path to checkpoint to resume from

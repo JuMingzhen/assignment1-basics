@@ -348,3 +348,4 @@ def load_checkpoint(src: str | os.PathLike | typing.BinaryIO | typing.IO[bytes],
     model.load_state_dict(obj["model"])
     optimizer.load_state_dict(obj["optimizer"])
     return obj["iteration"]
+
