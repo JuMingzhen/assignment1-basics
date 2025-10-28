@@ -150,7 +150,8 @@ class TrainingConfig:
         
         # Data parameters
         self.data_path = config_dict.get('data_path', 'data/train_tokens.npy')
-        
+        self.valid_data_path = config_dict.get('valid_data_path', 'data/valid_tokens.npy')
+
         # Checkpointing and logging
         self.checkpoint_dir = config_dict.get('checkpoint_dir', 'checkpoints')
         self.checkpoint_interval = config_dict.get('checkpoint_interval', 1000)
@@ -189,10 +190,10 @@ class Trainer:
         self.optimizer = self._create_optimizer()
         
         # Initialize dataset
-        self.dataset = self._create_dataset()
-        
+        self.dataset = self._create_dataset(self.config.data_path)
+        self.valid_dataset = self._create_dataset(self.config.valid_data_path)
         # Initialize data loader
-        self.data_loader = self._create_dataloader()
+        self.data_loader = self._create_dataloader(self.dataset)
         
         # Training state
         self.step = 0
@@ -242,21 +243,21 @@ class Trainer:
             weight_decay=self.config.weight_decay
         )
     
-    def _create_dataset(self) -> MemoryEfficientDataset:
+    def _create_dataset(self, dataset_path) -> MemoryEfficientDataset:
         """Create dataset for training."""
         if not os.path.exists(self.config.data_path):
             raise FileNotFoundError(f"Data file not found: {self.config.data_path}")
         
         return MemoryEfficientDataset(
-            data_path=self.config.data_path,
+            data_path=dataset_path,
             context_length=self.config.context_length,
             device=self.device
         )
     
-    def _create_dataloader(self) -> DataLoader:
+    def _create_dataloader(self, data) -> DataLoader:
         """Create data loader for training."""
         return DataLoader(
-            self.dataset,
+            data,
             batch_size=self.config.batch_size,
             shuffle=True,
             num_workers=0,  # Set to 0 to avoid multiprocessing issues with memmap
@@ -342,7 +343,19 @@ class Trainer:
         
         if self.config.use_wandb:
             wandb.log(metrics, step=self.step)
-    
+
+    def validate(self):
+        with torch.no_grad():
+            loss = 0.0
+            t = 0
+            dataloader = self._create_dataloader(self.valid_dataset)
+            for batch in dataloader:
+                sequences, targets = batch
+                logits = self.model(sequences)
+                loss += self._calculate_loss(logits, targets)   
+                t += 1
+            return loss / t           
+
     def train(self):
         """Main training loop."""
         logger.info("Starting training...")
@@ -377,9 +390,10 @@ class Trainer:
             if self.step % self.config.log_interval == 0:
                 avg_loss = running_loss / self.config.log_interval
                 lr = self.optimizer.param_groups[0]['lr']
-                
+                valid_loss = self.validate()
                 metrics = {
                     'train_loss': avg_loss,
+                    'valid_loss': valid_loss,
                     'learning_rate': lr,
                     'step': self.step,
                     'epoch': self.epoch
@@ -445,7 +459,7 @@ def create_default_config() -> Dict[str, Any]:
         
         # Data parameters
         'data_path': 'data/train_tokens.npy',
-        
+        'valid_data_path': 'data/valid_tokens.npy',
         # Checkpointing and logging
         'checkpoint_dir': 'checkpoints',
         'checkpoint_interval': 1000,
@@ -474,6 +488,7 @@ def main():
     
     # Command line arguments (will override config file)
     parser.add_argument('--data_path', type=str, help='Path to training data (.npy file)')
+    parser.add_argument('--valid_data_path', type=str, help='Path to validation data (.npy file)')
     parser.add_argument('--vocab_size', type=int, help='Vocabulary size')
     parser.add_argument('--context_length', type=int, help='Context length')
     parser.add_argument('--num_layers', type=int, help='Number of transformer layers')

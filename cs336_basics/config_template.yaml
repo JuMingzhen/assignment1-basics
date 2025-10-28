@@ -27,6 +27,7 @@ min_lr: 1e-6                        # Minimum learning rate
 
 # Data Parameters
 data_path: "data/train_tokens.npy"          # Path to training data (.npy file)
+valid_data_path: "data/valid_data_path.npy" # Path to validation data (.npy file)
 
 # Checkpointing and Logging
 checkpoint_dir: "checkpoints"               # Directory to save checkpoints

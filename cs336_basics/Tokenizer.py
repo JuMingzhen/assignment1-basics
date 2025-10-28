@@ -354,10 +354,10 @@ if __name__ == "__main__":
     t1 = time.time()
     tokenizer = Tokenizer.from_files("vocab.pkl","merges.pkl",["<|endoftext|>"])
     import numpy as np
-    with open("../data/TinyStoriesV2-GPT4-train.txt", encoding="utf-8") as f:
+    with open("../data/TinyStoriesV2-GPT4-valid.txt", encoding="utf-8") as f:
         yielder = tokenizer.encode_iterable(f)
         token_array = np.fromiter(yielder, dtype=np.uint16, count=-1)
     t2 = time.time()
     print(f"Total time:{t2-t1}.4f")
     print(token_array[:100])
-    np.save("TinyStories_token_ids.npy", token_array)
+    np.save("TinyStories_token_ids_valid.npy", token_array)
