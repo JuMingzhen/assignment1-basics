@@ -122,6 +122,9 @@ celerybeat.pid
 
 # trained objects
 *.pkl
+# ignore .json .yaml configuration
+*.json
+*.yaml
 
 # Environments
 .env

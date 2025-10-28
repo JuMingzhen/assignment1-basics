@@ -38,7 +38,7 @@ from torch.utils.data import DataLoader, Dataset
 import wandb
 
 # Import our custom modules
-from .Transformer import (
+from Transformer import (
     transformer_lm, 
     cross_entropy, 
     AdamW, 
@@ -285,7 +285,7 @@ class Trainer:
         # Forward pass
         sequences, targets = batch
         logits = self.model(sequences)
-        
+
         # Calculate loss
         loss = self._calculate_loss(logits, targets)
         
@@ -349,7 +349,9 @@ class Trainer:
             loss = 0.0
             t = 0
             dataloader = self._create_dataloader(self.valid_dataset)
-            for batch in dataloader:
+            while t < 10:
+                dataloader = iter(dataloader)
+                batch = next(dataloader)
                 sequences, targets = batch
                 logits = self.model(sequences)
                 loss += self._calculate_loss(logits, targets)   

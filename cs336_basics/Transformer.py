@@ -266,7 +266,7 @@ class transformer_lm(nn.Module):
 def cross_entropy(logits: torch.Tensor, next_token: torch.Tensor):
     logits = logits - torch.max(logits, dim = -1, keepdim=True).values
     next_token = next_token.unsqueeze(-1)
-    loss = - torch.gather(logits, -1, next_token) + torch.log(torch.sum(torch.exp(logits), dim = -1))
+    loss = - torch.gather(logits, -1, next_token).squeeze(-1) + torch.log(torch.sum(torch.exp(logits), dim = -1))
     return torch.mean(loss)
 
 class AdamW(torch.optim.Optimizer):
